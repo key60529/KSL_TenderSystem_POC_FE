@@ -1,0 +1,19 @@
+services:
+  frontend-dev:
+    image: node:22-alpine
+    container_name: tender_frontend_dev
+    working_dir: /app
+    # Mount source files so edits on the host are reflected instantly inside the container.
+    volumes:
+      - .:/app
+      # Use an anonymous volume for node_modules so the container's installed packages
+      # are not overwritten by the host's (possibly missing or incompatible) node_modules.
+      - /app/node_modules
+    ports:
+      # Expose Vite dev server — must match the port Vite listens on inside the container.
+      - '5173:5173'
+    environment:
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:55555}
+      - VITE_BACKEND_CHATBOT_KEY=${VITE_BACKEND_CHATBOT_KEY:-}
+      - VITE_BACKEND_WORKFLOW_KEY=${VITE_BACKEND_WORKFLOW_KEY:-}
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"

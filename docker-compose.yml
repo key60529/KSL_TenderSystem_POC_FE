@@ -1,0 +1,15 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # All three VITE_* vars must be passed as build args so Vite bakes them
+        # into the static output. Override any of them with an env var or a .env file.
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:55555}
+        VITE_BACKEND_CHATBOT_KEY: ${VITE_BACKEND_CHATBOT_KEY:-}
+        VITE_BACKEND_WORKFLOW_KEY: ${VITE_BACKEND_WORKFLOW_KEY:-}
+    ports:
+      # Browser-facing port 5173 maps to nginx port 80 inside the container.
+      - '5173:80'
+    restart: unless-stopped
