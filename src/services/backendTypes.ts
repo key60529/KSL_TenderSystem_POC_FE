@@ -47,11 +47,15 @@ export interface MarkingScheme {
   [criterion: string]: MarkingCriterion
 }
 
+export interface ProjectRequirements {
+  required_sections: Record<string, string[]>
+}
+
 export interface Project {
   id: number
   title: string
   description: string | null
-  master_requirements: MarkingScheme | null
+  master_requirements: ProjectRequirements | MarkingScheme | null
 }
 
 // ── Review / scoring types ────────────────────────────────────────────────────

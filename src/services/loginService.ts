@@ -9,7 +9,7 @@ export interface LoginRequest {
 }
 
 export interface LoginResult {
-  mode: 'backend' | 'mock'
+  mode: 'backend'
   username: string
   message: string
 }
@@ -49,15 +49,15 @@ export function clearAuthSession() {
 
 /**
  * Attempts login against the FastAPI backend.
- * FastAPI's OAuth2PasswordRequestForm requires form-encoded body (not JSON).
- * Returns the JWT access_token on success, or null on failure.
+ * FastAPI's OAuth2PasswordRequestForm requires a form-encoded body (not JSON).
+ * Throws an error when the backend rejects the credentials or is unreachable.
  */
-async function tryBackendLogin(username: string, password: string): Promise<string | null> {
+async function tryBackendLogin(username: string, password: string): Promise<string> {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS)
 
   try {
-    // FastAPI OAuth2PasswordRequestForm expects application/x-www-form-urlencoded
+    // FastAPI OAuth2PasswordRequestForm expects application/x-www-form-urlencoded.
     const body = new URLSearchParams({ username, password })
 
     const response = await fetch(AUTH_LOGIN_ENDPOINT, {
@@ -68,46 +68,48 @@ async function tryBackendLogin(username: string, password: string): Promise<stri
     })
 
     if (!response.ok) {
-      console.warn(`Login failed: HTTP ${response.status}`)
-      return null
+      const detail = await response.text().catch(() => '')
+      throw new Error(`Login failed (HTTP ${response.status}): ${detail || 'Unknown error'}`)
     }
 
-    const data = await response.json()
-    return data.access_token ?? null
+    const data = (await response.json()) as { access_token?: string }
+    if (!data.access_token) {
+      throw new Error('Login failed: access_token was not returned by the backend.')
+    }
+
+    return data.access_token
   } catch (error) {
-    console.warn('Backend login unreachable, falling back to mock mode.', error)
-    return null
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Login request timed out. Please check the backend connection.')
+    }
+    if (error instanceof Error) {
+      throw error
+    }
+    throw new Error('Login failed due to an unexpected error.')
   } finally {
     window.clearTimeout(timeoutId)
   }
 }
 
 export async function authenticateLogin(payload: LoginRequest): Promise<LoginResult> {
-  const username = payload.username?.trim() || 'guest'
+  const username = payload.username?.trim()
 
-  if (payload.provider === 'username-password' && payload.username && payload.password) {
-    const token = await tryBackendLogin(payload.username, payload.password)
-
-    if (token) {
-      storeAuthToken(token)
-      setUsernameCookie(username)
-      console.info('Login succeeded against backend.')
-      return {
-        mode: 'backend',
-        username,
-        message: 'Login successful. Entering workspace.',
-      }
-    }
-
-    // Credentials were provided but backend rejected or was unreachable — use mock
-    console.warn('Backend login failed or unavailable. Using mock mode.')
+  if (payload.provider !== 'username-password') {
+    throw new Error('SSO login is not implemented yet. Please use username and password.')
   }
 
-  // SSO or fallback mock path
+  if (!username || !payload.password) {
+    throw new Error('Username and password are required.')
+  }
+
+  const token = await tryBackendLogin(username, payload.password)
+  storeAuthToken(token)
   setUsernameCookie(username)
+
+  console.info('Login succeeded against backend.')
   return {
-    mode: 'mock',
+    mode: 'backend',
     username,
-    message: 'Backend unavailable. Using mock mode.',
+    message: 'Login successful. Entering workspace.',
   }
 }

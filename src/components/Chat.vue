@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ChatMessage } from '../services/backendTypes'
 import { sendBackendChatMessage } from '../services/chatService'
+import { buildProjectRequirementsFromStructure, saveProject } from '../services/projectService'
 import { parseTenderStructureFromMarkdown, type TenderStructureDocument } from '../services/chatArtifacts'
 import {
   createConversationRecord,
@@ -29,6 +30,9 @@ const isInspectorCollapsed = ref(false)
 const openStructureSections = ref<string[]>([])
 const isSaveProjectDialogOpen = ref(false)
 const projectName = ref('')
+const isSavingProject = ref(false)
+const saveProjectNotice = ref('')
+const saveProjectError = ref('')
 
 const activeConversation = computed(
   () =>
@@ -140,6 +144,8 @@ function startNewConversation() {
   inputMessage.value = ''
   openStructureSections.value = []
   projectName.value = ''
+  saveProjectNotice.value = ''
+  saveProjectError.value = ''
 
   saveChatHistoryState({
     activeConversationId: null,
@@ -326,20 +332,65 @@ function openInspectorPanel() {
 }
 
 function openSaveProjectDialog() {
-  // Open the confirmation dialog before saving the structure as a project.
+  saveProjectNotice.value = ''
+  saveProjectError.value = ''
+
+  if (!hasStructuredResponse.value) {
+    saveProjectError.value = 'No structured assistant response is available to save.'
+    return
+  }
+
   isSaveProjectDialogOpen.value = true
+  projectName.value = ''
 }
 
 function cancelSaveProjectDialog() {
   // Close the dialog without taking any save action.
   isSaveProjectDialogOpen.value = false
   projectName.value = ''
+  saveProjectError.value = ''
 }
 
-function confirmSaveProjectDialog() {
-  // Confirmation logic will be implemented later.
-  isSaveProjectDialogOpen.value = false
-  projectName.value = ''
+async function confirmSaveProjectDialog() {
+  const name = projectName.value.trim()
+
+  if (!hasStructuredResponse.value) {
+    saveProjectError.value = 'No structured assistant response is available to save.'
+    return
+  }
+
+  if (!name) {
+    saveProjectError.value = 'Please enter a project name.'
+    return
+  }
+
+  const structure = latestStructuredResponse.value
+  if (!structure) {
+    saveProjectError.value = 'Unable to read the latest structured response.'
+    return
+  }
+
+  isSavingProject.value = true
+  saveProjectError.value = ''
+  saveProjectNotice.value = ''
+
+  try {
+    const projectRequirements = buildProjectRequirementsFromStructure(structure)
+    await saveProject(
+      name,
+      '',
+      projectRequirements,
+      conversationId.value || undefined,
+    )
+
+    saveProjectNotice.value = 'Project saved successfully.'
+    isSaveProjectDialogOpen.value = false
+    projectName.value = ''
+  } catch (err) {
+    saveProjectError.value = err instanceof Error ? err.message : 'Failed to save project.'
+  } finally {
+    isSavingProject.value = false
+  }
 }
 
 async function sendMessage() {
@@ -435,11 +486,11 @@ onMounted(() => {
       :style="{ width: historyPanelWidth }"
     >
       <Transition name="panel-fade" mode="out-in">
-        <div v-if="isHistoryCollapsed" key="history-collapsed" class="flex h-full min-h-0 items-stretch">
+        <div v-if="isHistoryCollapsed" key="history-collapsed" class="flex h-full min-h-0">
           <button
             type="button"
             @click="isHistoryCollapsed = false"
-            class="flex h-full w-full items-center justify-center bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            class="flex h-full w-full items-center justify-center rounded-3xl bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
             aria-label="Open history panel"
           >
             <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -618,11 +669,11 @@ onMounted(() => {
       :style="{ width: inspectorPanelWidth }"
     >
       <Transition name="panel-fade" mode="out-in">
-        <div v-if="isInspectorCollapsed" key="inspector-collapsed" class="flex h-full min-h-0 items-stretch">
+        <div v-if="isInspectorCollapsed" key="inspector-collapsed" class="flex h-full min-h-0">
           <button
             type="button"
             @click="isInspectorCollapsed = false"
-            class="flex h-full w-full items-center justify-center bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            class="flex h-full w-full items-center justify-center rounded-3xl bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
             aria-label="Open structure panel"
           >
             <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -699,6 +750,12 @@ onMounted(() => {
           </div>
 
           <div class="shrink-0 border-t border-slate-100 bg-white p-3">
+            <div
+              v-if="saveProjectNotice"
+              class="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+            >
+              {{ saveProjectNotice }}
+            </div>
             <button
               type="button"
               @click="openSaveProjectDialog"
@@ -731,10 +788,17 @@ onMounted(() => {
           <input
             v-model="projectName"
             type="text"
-            placeholder="Enter Project Name"
+            placeholder="Project name"
             class="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
           />
         </label>
+
+        <div
+          v-if="saveProjectError"
+          class="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          {{ saveProjectError }}
+        </div>
 
         <div class="mt-6 flex justify-end gap-3">
           <button
@@ -747,9 +811,10 @@ onMounted(() => {
           <button
             type="button"
             @click="confirmSaveProjectDialog"
-            class="rounded-full bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700"
+            :disabled="isSavingProject"
+            class="rounded-full bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            Confirm
+            {{ isSavingProject ? 'Saving…' : 'Confirm' }}
           </button>
         </div>
       </div>

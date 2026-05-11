@@ -26,8 +26,7 @@ async function enterWorkspace(provider: LoginProvider) {
     await router.push('/tender-template')
   } catch (error) {
     console.error('Login flow failed:', error)
-    loginMessage.value = 'Backend unavailable. Using mock mode.'
-    await router.push('/tender-template')
+    loginMessage.value = error instanceof Error ? error.message : 'Login failed.'
   } finally {
     isConnecting.value = false
   }

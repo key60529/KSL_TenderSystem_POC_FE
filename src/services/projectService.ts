@@ -4,10 +4,20 @@
  */
 import { BACKEND_URL, CONNECTION_TIMEOUT_MS } from './backendConfig'
 import { getAuthToken } from './loginService'
-import type { MarkingScheme, Project, ReviewResponse } from './backendTypes'
+import type { MarkingScheme, ProjectRequirements, Project, ReviewResponse } from './backendTypes'
 
 function authHeaders(): Record<string, string> {
     return { Authorization: `Bearer ${getAuthToken()}` }
+}
+
+export function buildProjectRequirementsFromStructure(
+    structure: { required_sections: { name: string; requirements: string[] }[] },
+): ProjectRequirements {
+    return {
+        required_sections: Object.fromEntries(
+            structure.required_sections.map((section) => [section.name, section.requirements]),
+        ),
+    }
 }
 
 // ── Step 1-2: Upload tender document → get marking scheme from Dify ───────────
@@ -36,7 +46,7 @@ export async function analyseMarkingScheme(file: File): Promise<MarkingScheme> {
 export async function saveProject(
     title: string,
     description: string,
-    markingScheme: MarkingScheme,
+    projectRequirements: ProjectRequirements,
     difyConversationId?: string,
 ): Promise<{ id: number }> {
     const response = await fetch(`${BACKEND_URL}/projects/`, {
@@ -45,7 +55,7 @@ export async function saveProject(
         body: JSON.stringify({
             title,
             description,
-            master_requirements: markingScheme,
+            master_requirements: projectRequirements,
             dify_conversation_id: difyConversationId ?? '',
         }),
     })
@@ -76,6 +86,18 @@ export async function getProject(projectId: number): Promise<Project> {
 
     if (!response.ok) throw new Error(`Failed to load project (${response.status})`)
     return response.json() as Promise<Project>
+}
+
+export async function deleteProject(projectId: number): Promise<void> {
+    const response = await fetch(`${BACKEND_URL}/projects/${projectId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+    })
+
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`Failed to delete project (${response.status}): ${detail}`)
+    }
 }
 
 // ── Step 8-10: Score tenderer submissions ─────────────────────────────────────
