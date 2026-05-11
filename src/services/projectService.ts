@@ -4,7 +4,7 @@
  */
 import { BACKEND_URL, CONNECTION_TIMEOUT_MS } from './backendConfig'
 import { getAuthToken } from './loginService'
-import type { MarkingScheme, ProjectRequirements, Project, ReviewResponse } from './backendTypes'
+import type { MarkingScheme, ProjectRequirements, Project, ReviewResponse, ScoringJob, SubmitJobResponse } from './backendTypes'
 
 function authHeaders(): Record<string, string> {
     return { Authorization: `Bearer ${getAuthToken()}` }
@@ -130,4 +130,62 @@ export async function scoreSubmissions(
     } finally {
         window.clearTimeout(timeoutId)
     }
+}
+
+// ── Conversation list (backend-persisted) ─────────────────────────────────────
+
+export interface BackendConversation {
+    id: number
+    conversation_id: string
+    title: string
+    created_at: string | null
+}
+
+export async function listBackendConversations(): Promise<BackendConversation[]> {
+    const response = await fetch(`${BACKEND_URL}/conversations/`, {
+        headers: authHeaders(),
+    })
+    if (!response.ok) throw new Error(`Failed to load conversations (${response.status})`)
+    return response.json() as Promise<BackendConversation[]>
+}
+
+export async function deleteBackendConversation(conversationId: string): Promise<void> {
+    const response = await fetch(`${BACKEND_URL}/conversations/${conversationId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+    })
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`Failed to delete conversation (${response.status}): ${detail}`)
+    }
+}
+
+// ── Async scoring jobs ────────────────────────────────────────────────────────
+
+export async function submitScoringJob(projectId: number, files: File[]): Promise<SubmitJobResponse> {
+    const formData = new FormData()
+    for (const file of files) {
+        formData.append('files', file)
+    }
+    const response = await fetch(`${BACKEND_URL}/reviews/${projectId}/score-async`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: formData,
+    })
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`Failed to submit scoring job (${response.status}): ${detail}`)
+    }
+    return response.json() as Promise<SubmitJobResponse>
+}
+
+export async function pollJobStatus(jobId: number): Promise<ScoringJob> {
+    const response = await fetch(`${BACKEND_URL}/reviews/jobs/${jobId}`, {
+        headers: authHeaders(),
+    })
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`Failed to poll job status (${response.status}): ${detail}`)
+    }
+    return response.json() as Promise<ScoringJob>
 }

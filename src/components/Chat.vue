@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ChatMessage } from '../services/backendTypes'
-import { sendBackendChatMessage } from '../services/chatService'
-import { buildProjectRequirementsFromStructure, saveProject } from '../services/projectService'
+import { sendBackendChatMessage, initiateDocumentChat } from '../services/chatService'
+import { buildProjectRequirementsFromStructure, saveProject, listBackendConversations, deleteBackendConversation } from '../services/projectService'
 import { parseTenderStructureFromMarkdown, type TenderStructureDocument } from '../services/chatArtifacts'
 import {
   createConversationRecord,
@@ -33,6 +33,13 @@ const projectName = ref('')
 const isSavingProject = ref(false)
 const saveProjectNotice = ref('')
 const saveProjectError = ref('')
+
+// ── Upload-to-chat modal state ─────────────────────────────────────────────
+const isUploadModalOpen = ref(false)
+const uploadModalFile = ref<File | null>(null)
+const isUploadingDoc = ref(false)
+const uploadModalError = ref('')
+const uploadFileInputRef = ref<HTMLInputElement | null>(null)
 
 const activeConversation = computed(
   () =>
@@ -151,6 +158,125 @@ function startNewConversation() {
     activeConversationId: null,
     conversations: conversations.value,
   })
+}
+
+// ── Upload modal helpers ────────────────────────────────────────────────────
+
+function openUploadModal() {
+  uploadModalFile.value = null
+  uploadModalError.value = ''
+  isUploadModalOpen.value = true
+}
+
+function cancelUploadModal() {
+  isUploadModalOpen.value = false
+  uploadModalFile.value = null
+  uploadModalError.value = ''
+}
+
+async function deleteConversation(conversationId: string) {
+  try {
+    await deleteBackendConversation(conversationId)
+  } catch {
+    // Non-fatal — remove from local list anyway
+  }
+  conversations.value = conversations.value.filter((c) => c.conversationId !== conversationId)
+
+  // If we deleted the active conversation, reset the chat
+  if (activeConversationId.value === conversationId) {
+    activeConversationId.value = null
+    conversationId = ''
+    messages.value = []
+    error.value = ''
+  }
+
+  saveChatHistoryState({
+    activeConversationId: activeConversationId.value,
+    conversations: conversations.value,
+  })
+}
+
+function handleUploadFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  uploadModalFile.value = file
+  uploadModalError.value = ''
+}
+
+async function confirmUploadModal() {
+  const file = uploadModalFile.value
+  if (!file) {
+    uploadModalError.value = 'Please select a tender document to upload.'
+    return
+  }
+
+  isUploadingDoc.value = true
+  uploadModalError.value = ''
+
+  try {
+    // Save any in-progress conversation before starting fresh
+    if (activeConversationId.value && messages.value.length > 0) {
+      syncStore()
+    }
+
+    // Reset chat state
+    activeConversationId.value = null
+    conversationId.value = ''
+    messages.value = []
+    error.value = ''
+    inputMessage.value = ''
+    openStructureSections.value = []
+    projectName.value = ''
+    saveProjectNotice.value = ''
+    saveProjectError.value = ''
+
+    // Close modal before the network call so the user sees the chat loading state
+    isUploadModalOpen.value = false
+
+    // Show a placeholder user message with the file name
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: `📄 Uploaded: **${file.name}**`,
+      timestamp: Date.now(),
+    }
+    messages.value.push(userMessage)
+    isLoading.value = true
+    scrollToBottom()
+
+    const response = await initiateDocumentChat(file)
+
+    conversationId.value = response.conversationId
+    activeConversationId.value = response.conversationId
+
+    messages.value.push({
+      id: response.messageId,
+      role: 'assistant',
+      content: response.output.text,
+      timestamp: Date.now(),
+    })
+
+    // Persist the new conversation
+    const record = createConversationRecord(response.conversationId, messages.value)
+    conversations.value = upsertConversation(conversations.value, {
+      ...record,
+      title: file.name,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    saveChatHistoryState({
+      activeConversationId: response.conversationId,
+      conversations: conversations.value,
+    })
+
+    scrollToBottom()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to upload document. Please try again.'
+  } finally {
+    isUploadingDoc.value = false
+    isLoading.value = false
+    uploadModalFile.value = null
+  }
 }
 
 function getConversationPreview(conversation: ChatConversation) {
@@ -466,13 +592,38 @@ watch(latestStructuredResponse, (structure) => {
   openStructureSections.value = structure?.required_sections.map((section) => section.name) ?? []
 })
 
-onMounted(() => {
-  const historyState = loadChatHistoryState()
-  conversations.value = historyState.conversations
+onMounted(async () => {
+  // Load conversation list from backend (persisted per user)
+  try {
+    const backendConvs = await listBackendConversations()
+    // Merge backend list with any locally cached messages
+    const historyState = loadChatHistoryState()
+    const localMap = new Map(historyState.conversations.map((c) => [c.conversationId, c]))
 
-  if (historyState.activeConversationId) {
-    loadConversation(historyState.activeConversationId)
-    return
+    conversations.value = backendConvs.map((bc) => {
+      const local = localMap.get(bc.conversation_id)
+      return {
+        conversationId: bc.conversation_id,
+        title: bc.title || bc.conversation_id.slice(0, 12),
+        createdAt: bc.created_at ? new Date(bc.created_at).getTime() : Date.now(),
+        updatedAt: local?.updatedAt ?? (bc.created_at ? new Date(bc.created_at).getTime() : Date.now()),
+        messages: local?.messages ?? [],
+      }
+    })
+
+    // Restore active conversation if one was open
+    if (historyState.activeConversationId) {
+      loadConversation(historyState.activeConversationId)
+      return
+    }
+  } catch {
+    // Fall back to local history if backend is unreachable
+    const historyState = loadChatHistoryState()
+    conversations.value = historyState.conversations
+    if (historyState.activeConversationId) {
+      loadConversation(historyState.activeConversationId)
+      return
+    }
   }
 
   scrollToBottom()
@@ -522,37 +673,53 @@ onMounted(() => {
 
           <div class="min-h-0 flex-1 overflow-y-auto p-3">
             <div v-if="hasConversationHistory" class="space-y-2">
-              <button
+              <div
                 v-for="conversation in conversations"
                 :key="conversation.conversationId"
-                type="button"
-                @click="loadConversation(conversation.conversationId)"
-                :class="[
-                  'w-full rounded-2xl border px-4 py-3 text-left transition',
-                  conversation.conversationId === activeConversationId
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100',
-                ]"
+                class="group relative"
               >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0 flex-1">
-                    <p class="truncate text-sm font-medium">{{ conversation.title }}</p>
-                    <p class="mt-1 truncate text-xs opacity-70">{{ getConversationPreview(conversation) }}</p>
-                  </div>
-                </div>
-
-                <div
-                  class="mt-3 flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.18em]"
-                  :class="
+                <button
+                  type="button"
+                  @click="loadConversation(conversation.conversationId)"
+                  :class="[
+                    'w-full rounded-2xl border px-4 py-3 text-left transition',
                     conversation.conversationId === activeConversationId
-                      ? 'text-slate-300'
-                      : 'text-slate-400'
-                  "
+                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100',
+                  ]"
                 >
-                  <span>{{ conversation.conversationId.slice(0, 12) }}</span>
-                  <span>{{ formatConversationDate(conversation.updatedAt) }}</span>
-                </div>
-              </button>
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0 flex-1">
+                      <p class="truncate text-sm font-medium">{{ conversation.title }}</p>
+                      <p class="mt-1 truncate text-xs opacity-70">{{ getConversationPreview(conversation) }}</p>
+                    </div>
+                  </div>
+
+                  <div
+                    class="mt-3 flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.18em]"
+                    :class="
+                      conversation.conversationId === activeConversationId
+                        ? 'text-slate-300'
+                        : 'text-slate-400'
+                    "
+                  >
+                    <span>{{ conversation.conversationId.slice(0, 12) }}</span>
+                    <span>{{ formatConversationDate(conversation.updatedAt) }}</span>
+                  </div>
+                </button>
+
+                <!-- Delete button — visible on hover -->
+                <button
+                  type="button"
+                  @click.stop="deleteConversation(conversation.conversationId)"
+                  class="absolute right-2 top-2 hidden rounded-full p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-500 group-hover:flex"
+                  aria-label="Delete conversation"
+                >
+                  <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M6 8v8M10 8v8M14 8v8M4 5h12M8 5V3h4v2" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <div
@@ -577,7 +744,7 @@ onMounted(() => {
           <div class="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              @click="startNewConversation"
+              @click="openUploadModal"
               class="rounded-full bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700"
             >
               New
@@ -768,6 +935,77 @@ onMounted(() => {
       </Transition>
     </aside>
 
+    <!-- ── Upload-to-chat modal ───────────────────────────────────────────── -->
+    <div
+      v-if="isUploadModalOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="upload-modal-title"
+    >
+      <div class="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <h3 id="upload-modal-title" class="text-lg font-semibold tracking-tight text-slate-900">
+          Upload Tender Document
+        </h3>
+        <p class="mt-2 text-sm leading-6 text-slate-600">
+          Select a tender document (PDF or DOCX) to start a new chat. The document will be
+          analysed and a marking scheme will be extracted automatically.
+        </p>
+
+        <!-- Hidden file input -->
+        <input
+          ref="uploadFileInputRef"
+          type="file"
+          accept=".pdf,.docx,.doc"
+          class="sr-only"
+          @change="handleUploadFileChange"
+        />
+
+        <!-- Drop zone / file picker trigger -->
+        <button
+          type="button"
+          @click="uploadFileInputRef?.click()"
+          :disabled="isUploadingDoc"
+          class="mt-5 flex w-full flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <svg viewBox="0 0 24 24" class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+            <polyline points="16 8 12 4 8 8" />
+            <line x1="12" y1="4" x2="12" y2="16" />
+          </svg>
+          <span v-if="uploadModalFile" class="font-medium text-slate-900 break-all text-center">{{ uploadModalFile.name }}</span>
+          <span v-else>Click to choose a file&nbsp;&nbsp;·&nbsp;&nbsp;PDF or DOCX</span>
+        </button>
+
+        <div
+          v-if="uploadModalError"
+          class="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          {{ uploadModalError }}
+        </div>
+
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="cancelUploadModal"
+            :disabled="isUploadingDoc"
+            class="rounded-full border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            @click="confirmUploadModal"
+            :disabled="!uploadModalFile || isUploadingDoc"
+            class="rounded-full bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {{ isUploadingDoc ? 'Uploading…' : 'Upload & Start Chat' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Save-project dialog ─────────────────────────────────────────────── -->
     <div
       v-if="isSaveProjectDialogOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"

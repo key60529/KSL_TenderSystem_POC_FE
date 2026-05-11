@@ -84,3 +84,57 @@ export interface ReviewResponse {
   tenderer_count: number
   tenderers: TendererResult[]
 }
+
+// ── Async queue-based scoring types ──────────────────────────────────────────
+
+export interface RequirementResult {
+  requirement: string
+  fulfilled: boolean
+  score: number
+  evaluation: string
+  evidence: string
+}
+
+export interface SectionResult {
+  section_name: string
+  section_exists: boolean
+  section_evaluation: string
+  requirements: RequirementResult[]
+}
+
+export interface OverallSummary {
+  total_sections: number
+  sections_found: number
+  overall_score: number
+  general_evaluation: string
+}
+
+export interface ScoringResult {
+  overall_summary: OverallSummary
+  sections: SectionResult[]
+}
+
+export type JobFileStatus = 'pending' | 'processing' | 'done' | 'failed'
+export type JobStatus = 'pending' | 'processing' | 'done' | 'partial' | 'failed'
+
+export interface JobFile {
+  id: number
+  file_name: string
+  status: JobFileStatus
+  result: ScoringResult | null
+  error: string | null
+}
+
+export interface ScoringJob {
+  job_id: number
+  project_id: number
+  status: JobStatus
+  files: JobFile[]
+}
+
+export interface SubmitJobResponse {
+  job_id: number
+  project_id: number
+  file_count: number
+  status: string
+}

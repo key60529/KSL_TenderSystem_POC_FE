@@ -1,12 +1,13 @@
 import {
   BACKEND_CHATBOT_KEY,
+  BACKEND_URL,
   CHAT_ENDPOINT,
   CHAT_REQUEST_TIMEOUT_MS,
   DIFY_RESPONSE_MODE,
   MOCK_RESPONSE_DELAY_MS,
   VALIDATION_DRAFT_STORAGE_KEY,
 } from './backendConfig'
-import { readUsernameCookie } from './loginService'
+import { getAuthToken, readUsernameCookie } from './loginService'
 import type { BackendConversationResponse } from './backendTypes'
 
 interface DifyChatFile {
@@ -76,6 +77,45 @@ export function readValidationDraftFromStorage(): ValidationDraft | null {
 
 export function clearValidationDraftFromStorage() {
   window.localStorage.removeItem(VALIDATION_DRAFT_STORAGE_KEY)
+}
+
+/**
+ * Upload a tender document to the backend to initiate a new Dify chatbot
+ * conversation.  The backend forwards the file to Dify with the variable
+ * name `tender_doc` and the `UserName` of the authenticated user.
+ *
+ * Returns the opening assistant message together with the new conversation ID
+ * so the caller can display it and continue the conversation normally.
+ */
+export async function initiateDocumentChat(file: File): Promise<BackendConversationResponse> {
+  const formData = new FormData()
+  formData.append('tender_doc', file)
+
+  const response = await fetch(`${BACKEND_URL}/reviews/initiate-chat`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getAuthToken()}`,
+    },
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(`Failed to initiate chat (${response.status}): ${detail}`)
+  }
+
+  const data = (await response.json()) as {
+    conversation_id: string
+    message_id: string
+    answer: string
+  }
+
+  return {
+    status: response.status,
+    messageId: data.message_id || `msg-${Date.now()}`,
+    conversationId: data.conversation_id,
+    output: { text: data.answer || 'Document received. Analysing…' },
+  }
 }
 
 export async function sendBackendChatMessage(

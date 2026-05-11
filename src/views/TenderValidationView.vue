@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import FileUploadZone from '../components/FileUploadZone.vue'
-import { deleteProject, getProject, listProjects, scoreSubmissions } from '../services/projectService'
-import type { CriterionResult, Project, TendererResult } from '../services/backendTypes'
+import { deleteProject, getProject, listProjects, submitScoringJob, pollJobStatus } from '../services/projectService'
+import type { Project, JobFile, ScoringJob } from '../services/backendTypes'
 
 const projects = ref<Project[]>([])
 const selectedProjectId = ref<number | null>(null)
 const selectedProject = ref<Project | null>(null)
 const tendererFiles = ref<File[]>([])
-const reviewResults = ref<TendererResult[]>([])
+const jobFiles = ref<JobFile[]>([])  // live per-file status from polling
 const isLoadingProjects = ref(false)
 const isScoring = ref(false)
 const isDeletingProject = ref(false)
@@ -16,11 +16,305 @@ const error = ref('')
 const projectError = ref('')
 const projectSearchQuery = ref('')
 const expandedMarkingSections = ref<string[]>([])
+const expandedResultSections = ref<Record<string, string[]>>({})  // file_name -> open section names
 const isProjectPanelCollapsed = ref(false)
 const isMarkingPanelCollapsed = ref(false)
 const isDesktopLayout = ref(true)
 const projectPanelRef = ref<HTMLElement | null>(null)
 const markingPanelRef = ref<HTMLElement | null>(null)
+
+const TENDERER_MAX_FILES = 20
+const TENDERER_ACCEPTED_FORMATS = ['pdf', 'docx', 'doc']
+const CSV_FILE_PREFIX = 'tender-review'
+const DESKTOP_MEDIA_QUERY = '(min-width: 1280px)'
+const collapsedRailWidth = '36px'
+const expandedProjectWidth = '360px'
+const expandedMarkingWidth = '380px'
+const POLL_INTERVAL_MS = 4000
+
+let mediaQueryList: MediaQueryList | null = null
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+// ── Computed ─────────────────────────────────────────────────────────────────
+
+const criteriaList = computed<[string, string[]][]>(() => {
+  const requiredSections = selectedProject.value?.master_requirements?.required_sections
+  if (!requiredSections || typeof requiredSections !== 'object') return []
+  return Object.entries(requiredSections) as [string, string[]][]
+})
+
+const filteredProjects = computed(() => {
+  const query = projectSearchQuery.value.trim().toLowerCase()
+  if (!query) return projects.value
+  return projects.value.filter((p) =>
+    p.title.toLowerCase().includes(query) || (p.description?.toLowerCase().includes(query) ?? false)
+  )
+})
+
+const canScore = computed(() =>
+  selectedProject.value !== null && tendererFiles.value.length > 0 && !isScoring.value
+)
+
+const hasResults = computed(() => jobFiles.value.length > 0)
+
+const rankedDoneFiles = computed(() => {
+  return [...jobFiles.value]
+    .filter((f) => f.status === 'done' && f.result)
+    .sort((a, b) => {
+      const scoreA = a.result?.overall_summary?.overall_score ?? -1
+      const scoreB = b.result?.overall_summary?.overall_score ?? -1
+      return scoreB - scoreA
+    })
+})
+
+const pendingOrProcessingFiles = computed(() =>
+  jobFiles.value.filter((f) => f.status === 'pending' || f.status === 'processing')
+)
+
+const failedFiles = computed(() => jobFiles.value.filter((f) => f.status === 'failed'))
+
+const allDone = computed(() =>
+  jobFiles.value.length > 0 && jobFiles.value.every((f) => f.status === 'done' || f.status === 'failed')
+)
+
+const projectPanelWidth = computed(() => {
+  if (!isDesktopLayout.value) return '100%'
+  return isProjectPanelCollapsed.value ? collapsedRailWidth : expandedProjectWidth
+})
+
+const markingPanelWidth = computed(() => {
+  if (!isDesktopLayout.value) return '100%'
+  return isMarkingPanelCollapsed.value ? collapsedRailWidth : expandedMarkingWidth
+})
+
+const showCollapsedProjectRail = computed(() => isDesktopLayout.value && isProjectPanelCollapsed.value)
+const showCollapsedMarkingRail = computed(() => isDesktopLayout.value && isMarkingPanelCollapsed.value)
+
+// ── Layout / lifecycle ────────────────────────────────────────────────────────
+
+function syncExpandedSections() {
+  expandedMarkingSections.value = criteriaList.value.map(([s]) => s)
+}
+
+function syncLayoutMode() {
+  if (typeof window === 'undefined') return
+  mediaQueryList = window.matchMedia(DESKTOP_MEDIA_QUERY)
+  isDesktopLayout.value = mediaQueryList.matches
+}
+
+function handleMediaQueryChange(event: MediaQueryListEvent) {
+  isDesktopLayout.value = event.matches
+  if (!event.matches) {
+    isProjectPanelCollapsed.value = false
+    isMarkingPanelCollapsed.value = false
+  }
+}
+
+function toggleProjectPanel() { isProjectPanelCollapsed.value = !isProjectPanelCollapsed.value }
+function toggleMarkingPanel() { isMarkingPanelCollapsed.value = !isMarkingPanelCollapsed.value }
+
+onMounted(async () => {
+  isLoadingProjects.value = true
+  syncLayoutMode()
+  mediaQueryList?.addEventListener('change', handleMediaQueryChange)
+  try {
+    projects.value = await listProjects()
+  } catch (e) {
+    projectError.value = e instanceof Error ? e.message : 'Could not load projects.'
+  } finally {
+    isLoadingProjects.value = false
+  }
+})
+
+onBeforeUnmount(() => {
+  mediaQueryList?.removeEventListener('change', handleMediaQueryChange)
+  stopPolling()
+})
+
+// ── Project selection ─────────────────────────────────────────────────────────
+
+async function selectProject(id: number) {
+  selectedProjectId.value = id
+  selectedProject.value = null
+  jobFiles.value = []
+  error.value = ''
+  try {
+    selectedProject.value = await getProject(id)
+    syncExpandedSections()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Could not load project.'
+  }
+}
+
+function clearSelectedProject() {
+  selectedProjectId.value = null
+  selectedProject.value = null
+  jobFiles.value = []
+  tendererFiles.value = []
+  error.value = ''
+  expandedMarkingSections.value = []
+  stopPolling()
+}
+
+function isSectionOpen(sectionName: string) {
+  return expandedMarkingSections.value.includes(sectionName)
+}
+
+function toggleSection(sectionName: string) {
+  if (expandedMarkingSections.value.includes(sectionName)) {
+    expandedMarkingSections.value = expandedMarkingSections.value.filter((s) => s !== sectionName)
+  } else {
+    expandedMarkingSections.value = [...expandedMarkingSections.value, sectionName]
+  }
+}
+
+function handleTendererFilesSelected(files: File[]) {
+  tendererFiles.value = files
+  jobFiles.value = []
+  error.value = ''
+  stopPolling()
+}
+
+// ── Async scoring + polling ───────────────────────────────────────────────────
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function pollOnce(jobId: number) {
+  try {
+    const job: ScoringJob = await pollJobStatus(jobId)
+    jobFiles.value = job.files
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'partial') {
+      stopPolling()
+      isScoring.value = false
+      // expand all result sections for the first done file
+      for (const f of job.files) {
+        if (f.result?.sections) {
+          expandedResultSections.value[f.file_name] = f.result.sections.map((s) => s.section_name)
+        }
+      }
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Polling error.'
+    stopPolling()
+    isScoring.value = false
+  }
+}
+
+async function runScoring() {
+  if (!selectedProject.value) return
+  isScoring.value = true
+  error.value = ''
+  jobFiles.value = []
+  stopPolling()
+  try {
+    const response = await submitScoringJob(selectedProject.value.id, tendererFiles.value)
+    // Optimistically populate pending entries so UI shows immediately
+    jobFiles.value = tendererFiles.value.map((f, i) => ({
+      id: i,
+      file_name: f.name,
+      status: 'pending' as const,
+      result: null,
+      error: null,
+    }))
+    // Start polling
+    const jobId = response.job_id
+    pollTimer = setInterval(() => pollOnce(jobId), POLL_INTERVAL_MS)
+    // Also poll once immediately
+    await pollOnce(jobId)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to submit scoring job.'
+    isScoring.value = false
+  }
+}
+
+async function removeSelectedProjectById(projectId: number) {
+  if (isDeletingProject.value) return
+  const project = projects.value.find((p) => p.id === projectId)
+  if (!project) return
+  const confirmed = window.confirm(`Delete project "${project.title}"? This cannot be undone.`)
+  if (!confirmed) return
+  isDeletingProject.value = true
+  error.value = ''
+  try {
+    await deleteProject(projectId)
+    projects.value = projects.value.filter((p) => p.id !== projectId)
+    if (selectedProject.value?.id === projectId) clearSelectedProject()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Could not delete project.'
+  } finally {
+    isDeletingProject.value = false
+  }
+}
+
+// ── Result helpers ────────────────────────────────────────────────────────────
+
+function isResultSectionOpen(fileName: string, sectionName: string) {
+  return (expandedResultSections.value[fileName] ?? []).includes(sectionName)
+}
+
+function toggleResultSection(fileName: string, sectionName: string) {
+  const current = expandedResultSections.value[fileName] ?? []
+  if (current.includes(sectionName)) {
+    expandedResultSections.value[fileName] = current.filter((s) => s !== sectionName)
+  } else {
+    expandedResultSections.value[fileName] = [...current, sectionName]
+  }
+}
+
+function rankLabel(index: number): string {
+  return ['🥇', '🥈', '🥉'][index] ?? `#${index + 1}`
+}
+
+function scorePercent(score: number, total: number): number {
+  if (total === 0) return 0
+  return Math.round((score / total) * 100)
+}
+
+function scoreBarColor(pct: number): string {
+  if (pct >= 75) return 'bg-emerald-500'
+  if (pct >= 50) return 'bg-amber-400'
+  return 'bg-red-400'
+}
+
+function downloadReport() {
+  if (!hasResults.value) return
+  const headers = ['Rank', 'File', 'Overall Score', 'Sections Found', 'Section', 'Exists', 'Requirement', 'Fulfilled', 'Score', 'Evidence']
+  const rows: string[][] = []
+  rankedDoneFiles.value.forEach((f, rank) => {
+    const summary = f.result?.overall_summary
+    const sections = f.result?.sections ?? []
+    if (sections.length === 0) {
+      rows.push([String(rank + 1), f.file_name, String(summary?.overall_score ?? ''), String(summary?.sections_found ?? ''), '', '', '', '', '', ''])
+    }
+    for (const sec of sections) {
+      for (const req of sec.requirements) {
+        rows.push([
+          String(rank + 1), f.file_name,
+          String(summary?.overall_score ?? ''), String(summary?.sections_found ?? ''),
+          sec.section_name, sec.section_exists ? 'Yes' : 'No',
+          req.requirement, req.fulfilled ? 'Yes' : 'No',
+          String(req.score), req.evidence,
+        ])
+      }
+    }
+  })
+  const csv = [headers, ...rows].map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${CSV_FILE_PREFIX}-${new Date().toISOString().split('T')[0]}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+</script>
 
 const TENDERER_MAX_FILES = 20
 const TENDERER_ACCEPTED_FORMATS = ['pdf', 'docx', 'doc']
@@ -413,9 +707,8 @@ function statusClass(status: string) {
                 Tender Response
               </h2>
             </div>
-
             <button
-              v-if="hasResults"
+              v-if="hasResults && allDone"
               type="button"
               @click="downloadReport"
               class="rounded-full border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 transition hover:bg-slate-50"
@@ -425,7 +718,8 @@ function statusClass(status: string) {
           </div>
         </div>
 
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 gap-4">
+          <!-- Upload zone -->
           <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <FileUploadZone
               :max-files="TENDERER_MAX_FILES"
@@ -433,11 +727,9 @@ function statusClass(status: string) {
               :initial-files="tendererFiles"
               @files-selected="handleTendererFilesSelected"
             />
-
             <div v-if="error" class="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-600">
               {{ error }}
             </div>
-
             <div class="mt-4 flex flex-wrap items-center gap-3">
               <button
                 type="button"
@@ -445,99 +737,136 @@ function statusClass(status: string) {
                 :disabled="!canScore"
                 class="rounded-full bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
-                {{ isScoring ? 'Scoring…' : 'Run Review' }}
+                {{ isScoring ? 'Processing…' : 'Run Review' }}
               </button>
-              <span v-if="isScoring" class="text-xs text-slate-400">
-                This may take a minute per file…
+              <span v-if="isScoring && !allDone" class="text-xs text-slate-400">
+                Files are scored one-by-one — this may take several minutes…
               </span>
             </div>
           </div>
 
-          <div v-if="hasResults" class="mt-4 rounded-3xl border border-slate-200 bg-white p-4">
+          <!-- Per-file queue progress -->
+          <div v-if="hasResults" class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <p class="mb-3 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Queue Progress</p>
+            <div class="space-y-2">
+              <div
+                v-for="f in jobFiles"
+                :key="f.id"
+                class="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-2.5"
+              >
+                <span class="min-w-0 flex-1 truncate text-sm text-slate-700">{{ f.file_name }}</span>
+                <span
+                  :class="[
+                    'shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium',
+                    f.status === 'done'       ? 'bg-emerald-100 text-emerald-700' :
+                    f.status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' :
+                    f.status === 'failed'     ? 'bg-red-100 text-red-700' :
+                                                'bg-slate-100 text-slate-500',
+                  ]"
+                >
+                  {{ f.status === 'pending' ? 'Waiting…' : f.status === 'processing' ? 'Scoring…' : f.status === 'done' ? 'Done ✓' : 'Failed ✗' }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Failed files -->
+          <div v-if="failedFiles.length > 0" class="rounded-3xl border border-red-200 bg-red-50 p-4">
+            <p class="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-red-500">Errors</p>
+            <div v-for="f in failedFiles" :key="f.id" class="text-sm text-red-700">
+              <span class="font-medium">{{ f.file_name }}</span>: {{ f.error ?? 'Unknown error' }}
+            </div>
+          </div>
+
+          <!-- Ranked results -->
+          <div v-if="rankedDoneFiles.length > 0" class="rounded-3xl border border-slate-200 bg-white p-4">
             <div class="mb-4 flex items-center justify-between gap-3">
               <div>
                 <p class="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Results</p>
-                <p class="mt-1 text-sm text-slate-500">
-                  Review each tenderer’s score and disqualification status.
-                </p>
+                <p class="mt-1 text-sm text-slate-500">Ranked by overall score, highest first.</p>
               </div>
-              <span
-                v-if="disqualifiedCount > 0"
-                class="rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700"
-              >
-                {{ disqualifiedCount }} DQ'd
+              <span v-if="pendingOrProcessingFiles.length > 0" class="text-xs text-slate-400 animate-pulse">
+                {{ pendingOrProcessingFiles.length }} file(s) still processing…
               </span>
             </div>
 
-            <div class="space-y-4">
+            <div class="space-y-5">
               <div
-                v-for="tenderer in reviewResults"
-                :key="tenderer.tenderer_file"
-                :class="[
-                  'rounded-2xl border p-4',
-                  tenderer.is_disqualified
-                    ? 'border-red-200 bg-red-50'
-                    : 'border-slate-200 bg-slate-50',
-                ]"
+                v-for="(f, rank) in rankedDoneFiles"
+                :key="f.id"
+                class="rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden"
               >
-                <div class="flex items-center justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="truncate text-sm font-semibold text-slate-900">
-                      {{ tenderer.tenderer_file }}
-                    </p>
-                    <p v-if="!tenderer.error" class="text-xs text-slate-500">
-                      Total: {{ totalScore(tenderer.results) }}
-                    </p>
+                <div class="flex items-center gap-3 px-4 py-3 bg-white border-b border-slate-100">
+                  <span class="text-xl leading-none">{{ rankLabel(rank) }}</span>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-sm font-semibold text-slate-900">{{ f.file_name }}</p>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ f.result?.overall_summary?.general_evaluation }}</p>
                   </div>
-                  <span
-                    v-if="tenderer.is_disqualified"
-                    class="rounded-full bg-red-600 px-3 py-1 text-xs font-semibold text-white"
-                  >
-                    DQ
-                  </span>
-                  <span
-                    v-else
-                    class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700"
-                  >
-                    Qualified
-                  </span>
+                  <div class="shrink-0 text-right">
+                    <p class="text-xl font-bold text-slate-900">{{ f.result?.overall_summary?.overall_score ?? '—' }}</p>
+                    <p class="text-xs text-slate-400">overall score</p>
+                  </div>
                 </div>
 
-                <p v-if="tenderer.error" class="mt-2 text-sm text-red-600">
-                  {{ tenderer.error }}
-                </p>
+                <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                  <div class="flex items-center gap-3 text-xs text-slate-500">
+                    <span>{{ f.result?.overall_summary?.sections_found }} / {{ f.result?.overall_summary?.total_sections }} sections found</span>
+                  </div>
+                  <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      :class="['h-full rounded-full transition-all duration-500', scoreBarColor(scorePercent(f.result?.overall_summary?.overall_score ?? 0, f.result?.overall_summary?.total_sections ?? 1))]"
+                      :style="{ width: scorePercent(f.result?.overall_summary?.overall_score ?? 0, f.result?.overall_summary?.total_sections ?? 1) + '%' }"
+                    />
+                  </div>
+                </div>
 
-                <div v-else class="mt-3 space-y-2">
+                <div class="divide-y divide-slate-100">
                   <div
-                    v-for="result in tenderer.results"
-                    :key="result.criterion"
-                    class="rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                    v-for="section in f.result?.sections"
+                    :key="section.section_name"
+                    class="overflow-hidden"
                   >
-                    <div class="flex items-start justify-between gap-2">
-                      <span class="text-sm font-medium text-slate-800">{{ result.criterion }}</span>
-                      <div class="flex shrink-0 items-center gap-2">
-                        <span v-if="result.score !== null" class="text-xs text-slate-500">
-                          {{ result.score }} / {{ result.max_score }}
-                        </span>
-                        <span
-                          :class="[
-                            'rounded-full px-2 py-0.5 text-xs font-medium',
-                            statusClass(result.status),
-                          ]"
-                        >
-                          {{ result.status.toUpperCase() }}
-                        </span>
+                    <button
+                      type="button"
+                      class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-slate-100"
+                      @click="toggleResultSection(f.file_name, section.section_name)"
+                    >
+                      <div class="min-w-0 flex-1 flex items-center gap-2">
+                        <span :class="['shrink-0 h-2 w-2 rounded-full', section.section_exists ? 'bg-emerald-500' : 'bg-red-400']" />
+                        <span class="truncate text-sm font-medium text-slate-800">{{ section.section_name }}</span>
+                      </div>
+                      <div class="flex items-center gap-3 shrink-0">
+                        <span class="text-xs text-slate-500 max-w-[160px] truncate">{{ section.section_evaluation }}</span>
+                        <svg
+                          viewBox="0 0 20 20" class="h-4 w-4 text-slate-400 transition-transform duration-200"
+                          :class="{ 'rotate-90': isResultSectionOpen(f.file_name, section.section_name) }"
+                          fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                        ><path d="M8 5l5 5-5 5" /></svg>
+                      </div>
+                    </button>
+
+                    <div
+                      v-if="isResultSectionOpen(f.file_name, section.section_name)"
+                      class="border-t border-slate-100 bg-white px-4 py-3 space-y-2"
+                    >
+                      <div
+                        v-for="req in section.requirements"
+                        :key="req.requirement"
+                        class="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"
+                      >
+                        <div class="flex items-start justify-between gap-2">
+                          <p class="text-sm text-slate-800 flex-1">{{ req.requirement }}</p>
+                          <div class="flex shrink-0 items-center gap-2">
+                            <span class="text-xs font-medium text-slate-600">{{ req.score }}</span>
+                            <span :class="['rounded-full px-2 py-0.5 text-xs font-medium', req.fulfilled ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700']">
+                              {{ req.fulfilled ? 'Met' : 'Unmet' }}
+                            </span>
+                          </div>
+                        </div>
+                        <p v-if="req.evaluation" class="mt-1 text-xs text-slate-500">{{ req.evaluation }}</p>
+                        <p v-if="req.evidence" class="mt-0.5 text-xs italic text-slate-400">📍 {{ req.evidence }}</p>
                       </div>
                     </div>
-                    <p v-if="result.dq_reason" class="mt-1 text-xs text-red-600">
-                      ⛔ {{ result.dq_reason }}
-                    </p>
-                    <p v-if="result.comment" class="mt-1 text-xs text-slate-500">
-                      {{ result.comment }}
-                    </p>
-                    <p v-if="result.evidence" class="mt-0.5 text-xs italic text-slate-400">
-                      📍 {{ result.evidence }}
-                    </p>
                   </div>
                 </div>
               </div>
