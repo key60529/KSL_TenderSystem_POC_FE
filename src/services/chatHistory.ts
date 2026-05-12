@@ -8,6 +8,7 @@ export interface ChatConversation {
   createdAt: number
   updatedAt: number
   messages: ChatMessage[]
+  isLocked?: boolean   // true once the conversation has been saved as a project
 }
 
 export interface ChatHistoryState {
@@ -60,6 +61,7 @@ function normalizeConversation(input: Partial<ChatConversation>): ChatConversati
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
     messages,
+    isLocked: input.isLocked === true,
   }
 }
 
@@ -78,9 +80,9 @@ export function loadChatHistoryState(): ChatHistoryState {
 
     const conversations = Array.isArray(parsed.conversations)
       ? parsed.conversations
-          .map((conversation) => normalizeConversation(conversation))
-          .filter((conversation): conversation is ChatConversation => conversation !== null)
-          .sort((left, right) => right.updatedAt - left.updatedAt)
+        .map((conversation) => normalizeConversation(conversation))
+        .filter((conversation): conversation is ChatConversation => conversation !== null)
+        .sort((left, right) => right.updatedAt - left.updatedAt)
       : []
 
     const activeConversationId =
@@ -132,6 +134,7 @@ export function upsertConversation(
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     messages: cloneMessages(conversation.messages),
+    isLocked: conversation.isLocked,
   }
 
   const nextConversations = conversations

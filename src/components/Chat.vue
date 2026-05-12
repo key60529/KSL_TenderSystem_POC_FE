@@ -48,6 +48,8 @@ const activeConversation = computed(
     ) ?? null,
 )
 
+const isConversationLocked = computed(() => activeConversation.value?.isLocked === true)
+
 const hasConversationHistory = computed(() => conversations.value.length > 0)
 
 const latestStructuredResponse = computed<TenderStructureDocument | null>(() => {
@@ -512,6 +514,20 @@ async function confirmSaveProjectDialog() {
     saveProjectNotice.value = 'Project saved successfully.'
     isSaveProjectDialogOpen.value = false
     projectName.value = ''
+
+    // Lock the active conversation so it cannot be continued
+    if (activeConversationId.value) {
+      const idx = conversations.value.findIndex(
+        (c) => c.conversationId === activeConversationId.value,
+      )
+      if (idx !== -1) {
+        conversations.value[idx] = { ...conversations.value[idx], isLocked: true }
+        saveChatHistoryState({
+          activeConversationId: activeConversationId.value,
+          conversations: conversations.value,
+        })
+      }
+    }
   } catch (err) {
     saveProjectError.value = err instanceof Error ? err.message : 'Failed to save project.'
   } finally {
@@ -521,7 +537,7 @@ async function confirmSaveProjectDialog() {
 
 async function sendMessage() {
   const text = inputMessage.value.trim()
-  if (!text || isLoading.value) {
+  if (!text || isLoading.value || isConversationLocked.value) {
     return
   }
 
@@ -690,7 +706,13 @@ onMounted(async () => {
                 >
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0 flex-1">
-                      <p class="truncate text-sm font-medium">{{ conversation.title }}</p>
+                      <div class="flex items-center gap-1.5">
+                        <svg v-if="conversation.isLocked" viewBox="0 0 20 20" class="h-3 w-3 shrink-0 opacity-60" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked">
+                          <rect x="4" y="9" width="12" height="9" rx="2" />
+                          <path d="M7 9V6a3 3 0 0 1 6 0v3" />
+                        </svg>
+                        <p class="truncate text-sm font-medium">{{ conversation.title }}</p>
+                      </div>
                       <p class="mt-1 truncate text-xs opacity-70">{{ getConversationPreview(conversation) }}</p>
                     </div>
                   </div>
@@ -809,12 +831,24 @@ onMounted(async () => {
       </div>
 
       <div class="shrink-0 border-t border-slate-100 bg-white p-3 sm:p-4">
+        <!-- Locked banner -->
+        <div
+          v-if="isConversationLocked"
+          class="mb-3 flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700"
+        >
+          <svg viewBox="0 0 20 20" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="9" width="12" height="9" rx="2" />
+            <path d="M7 9V6a3 3 0 0 1 6 0v3" />
+          </svg>
+          <span>This conversation has been saved as a project and is now read-only.</span>
+        </div>
+
         <div class="flex items-end gap-3">
           <textarea
             v-model="inputMessage"
-            :disabled="isLoading"
+            :disabled="isLoading || isConversationLocked"
             @keydown="handleKeyDown"
-            placeholder="Type your message..."
+            :placeholder="isConversationLocked ? 'Conversation locked — start a new chat to continue.' : 'Type your message...'"
             rows="1"
             class="h-20 min-h-[3.25rem] flex-1 resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
           />
@@ -822,7 +856,7 @@ onMounted(async () => {
           <button
             type="button"
             @click="sendMessage"
-            :disabled="!inputMessage.trim() || isLoading"
+            :disabled="!inputMessage.trim() || isLoading || isConversationLocked"
             class="h-12 shrink-0 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {{ isLoading ? 'Sending' : 'Send' }}
