@@ -85,7 +85,7 @@ const hasStructuredResponse = computed(() => structuredSections.value.length > 0
 
 const collapsedRailWidth = '30px'
 const expandedHistoryWidth = '280px'
-const expandedInspectorWidth = '360px'
+const expandedInspectorWidth = '50%'
 
 const historyPanelWidth = computed(() =>
   isHistoryCollapsed.value ? collapsedRailWidth : expandedHistoryWidth,
@@ -533,6 +533,10 @@ async function confirmSaveProjectDialog() {
         })
       }
     }
+
+    // Close the dialog automatically on success
+    isSaveProjectDialogOpen.value = false
+
   } catch (err) {
     saveProjectError.value = err instanceof Error ? err.message : 'Failed to save project.'
   } finally {
@@ -806,7 +810,10 @@ onMounted(async () => {
     </aside>
 
     <section
-      class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
+      :class="[
+        'flex min-h-0 min-w-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-in-out',
+        isInspectorCollapsed ? 'flex-1' : 'flex-1'
+      ]"
     >
       <div class="shrink-0 border-b border-slate-100 px-4 py-3">
         <div class="flex items-start justify-between gap-4">
@@ -1081,9 +1088,10 @@ onMounted(async () => {
             <button
               type="button"
               @click="openSaveProjectDialog"
-              class="w-full rounded-full bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-700"
+              :disabled="isConversationLocked"
+              class="w-full rounded-full bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              Save As Project
+              {{ isConversationLocked ? 'Saved as Project' : 'Save As Project' }}
             </button>
           </div>
         </div>

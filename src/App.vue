@@ -74,14 +74,14 @@ watch(
               class="rounded-full px-4 py-2 transition hover:bg-slate-100 hover:text-slate-900"
               :class="route.path === '/tender-template' ? 'bg-slate-900 text-white hover:bg-slate-900 hover:text-white' : ''"
             >
-              Chatroom
+              Marking Scheme
             </RouterLink>
             <RouterLink
               to="/tender-validation"
               class="rounded-full px-4 py-2 transition hover:bg-slate-100 hover:text-slate-900"
               :class="route.path === '/tender-validation' ? 'bg-slate-900 text-white hover:bg-slate-900 hover:text-white' : ''"
             >
-              Validate
+              Tender Scoring
             </RouterLink>
           </nav>
 

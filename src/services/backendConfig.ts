@@ -1,5 +1,5 @@
 export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL?.trim() || 'http://localhost:8000'
-export const BACKEND_CHATBOT_KEY = 'app-UnhDDkWMmnpIj70EcEVfkomo'
+export const BACKEND_CHATBOT_KEY = import.meta.env.VITE_BACKEND_CHATBOT_KEY?.trim() || ''
 export const BACKEND_WORKFLOW_KEY = import.meta.env.VITE_BACKEND_WORKFLOW_KEY?.trim() || ''
 
 // The actual login endpoint on the FastAPI backend (prefix: /auth, route: /login)

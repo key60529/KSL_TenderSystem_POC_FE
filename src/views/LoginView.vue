@@ -46,7 +46,7 @@ async function enterWorkspace(provider: LoginProvider) {
 
         <form class="mt-8 space-y-4" @submit.prevent="enterWorkspace('username-password')">
           <label class="block text-left">
-            <span class="mb-2 block text-sm font-medium text-slate-700">username</span>
+            <span class="mb-2 block text-sm font-medium text-slate-700">Username</span>
             <input
               v-model="form.username"
               type="text"
