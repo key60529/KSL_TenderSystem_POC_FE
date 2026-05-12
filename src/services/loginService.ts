@@ -16,6 +16,7 @@ export interface LoginResult {
 
 const AUTH_COOKIE_NAME = 'username'
 const TOKEN_STORAGE_KEY = 'auth_token'
+const TOKEN_STORAGE_KEY_LEGACY = 'backend_auth_token'
 const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 
 function buildCookieValue(username: string) {
@@ -35,15 +36,26 @@ export function readUsernameCookie(): string {
 }
 
 export function getAuthToken(): string {
-  return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? ''
+  const sessionToken = sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() ?? ''
+  if (sessionToken) return sessionToken
+
+  const localToken = localStorage.getItem(TOKEN_STORAGE_KEY)?.trim() ?? ''
+  if (localToken) return localToken
+
+  const legacyToken = localStorage.getItem(TOKEN_STORAGE_KEY_LEGACY)?.trim() ?? ''
+  return legacyToken
 }
 
 function storeAuthToken(token: string) {
-  sessionStorage.setItem(TOKEN_STORAGE_KEY, token)
+  const normalizedToken = token.trim()
+  sessionStorage.setItem(TOKEN_STORAGE_KEY, normalizedToken)
+  localStorage.setItem(TOKEN_STORAGE_KEY, normalizedToken)
 }
 
 export function clearAuthSession() {
   sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+  localStorage.removeItem(TOKEN_STORAGE_KEY)
+  localStorage.removeItem(TOKEN_STORAGE_KEY_LEGACY)
   document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0`
 }
 

@@ -138,3 +138,26 @@ export interface SubmitJobResponse {
   file_count: number
   status: string
 }
+
+
+// ── Review history (manual refresh) ─────────────────────────────────────────
+
+export interface ReviewHistoryFile {
+  id: number
+  file_name: string
+  status: JobFileStatus
+  result: ScoringResult | null
+  error: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ReviewHistoryItem {
+  job_id: number
+  project_id: number
+  status: JobStatus
+  workflow_id: string | null
+  created_at: string | null
+  updated_at: string | null
+  files: ReviewHistoryFile[]
+}

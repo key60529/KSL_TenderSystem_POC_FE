@@ -2,8 +2,16 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ChatMessage } from '../services/backendTypes'
 import { sendBackendChatMessage, initiateDocumentChat } from '../services/chatService'
-import { buildProjectRequirementsFromStructure, saveProject, listBackendConversations, deleteBackendConversation } from '../services/projectService'
-import { parseTenderStructureFromMarkdown, type TenderStructureDocument } from '../services/chatArtifacts'
+import {
+  buildProjectRequirementsFromStructure,
+  saveProject,
+  listBackendConversations,
+  deleteBackendConversation,
+} from '../services/projectService'
+import {
+  parseTenderStructureFromMarkdown,
+  type TenderStructureDocument,
+} from '../services/chatArtifacts'
 import {
   createConversationRecord,
   loadChatHistoryState,
@@ -273,7 +281,8 @@ async function confirmUploadModal() {
 
     scrollToBottom()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to upload document. Please try again.'
+    error.value =
+      err instanceof Error ? err.message : 'Failed to upload document. Please try again.'
   } finally {
     isUploadingDoc.value = false
     isLoading.value = false
@@ -350,20 +359,23 @@ function renderMarkdown(message: string, isUserMessage = false) {
   const normalized = getDisplayMessageContent(message).replace(/\r\n/g, '\n')
   const codeBlocks: string[] = []
 
-  const withCodeTokens = normalized.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_, languageRaw: string, code: string) => {
-    const language = languageRaw.trim().toLowerCase()
+  const withCodeTokens = normalized.replace(
+    /```([^\n`]*)\n([\s\S]*?)```/g,
+    (_, languageRaw: string, code: string) => {
+      const language = languageRaw.trim().toLowerCase()
 
-    if (language === 'json') {
-      // Hide JSON fenced blocks completely in the chat bubble.
-      return ''
-    }
+      if (language === 'json') {
+        // Hide JSON fenced blocks completely in the chat bubble.
+        return ''
+      }
 
-    const token = `__CODE_BLOCK_${codeBlocks.length}__`
-    codeBlocks.push(
-      `<pre class="overflow-x-auto rounded-2xl px-4 py-3 text-sm leading-6 ${isUserMessage ? 'bg-white/10 text-white' : 'bg-slate-950 text-slate-100'}"><code class="font-mono">${escapeHtml(code.trimEnd())}</code></pre>`,
-    )
-    return token
-  })
+      const token = `__CODE_BLOCK_${codeBlocks.length}__`
+      codeBlocks.push(
+        `<pre class="overflow-x-auto rounded-2xl px-4 py-3 text-sm leading-6 ${isUserMessage ? 'bg-white/10 text-white' : 'bg-slate-950 text-slate-100'}"><code class="font-mono">${escapeHtml(code.trimEnd())}</code></pre>`,
+      )
+      return token
+    },
+  )
 
   const lines = withCodeTokens.split('\n')
   const blocks: string[] = []
@@ -481,8 +493,9 @@ function cancelSaveProjectDialog() {
 
 async function confirmSaveProjectDialog() {
   const name = projectName.value.trim()
+  const structure = latestStructuredResponse.value
 
-  if (!hasStructuredResponse.value) {
+  if (!hasStructuredResponse.value || !structure) {
     saveProjectError.value = 'No structured assistant response is available to save.'
     return
   }
@@ -492,36 +505,28 @@ async function confirmSaveProjectDialog() {
     return
   }
 
-  const structure = latestStructuredResponse.value
-  if (!structure) {
-    saveProjectError.value = 'Unable to read the latest structured response.'
-    return
-  }
-
   isSavingProject.value = true
   saveProjectError.value = ''
   saveProjectNotice.value = ''
 
   try {
     const projectRequirements = buildProjectRequirementsFromStructure(structure)
-    await saveProject(
-      name,
-      '',
-      projectRequirements,
-      conversationId.value || undefined,
-    )
-
-    saveProjectNotice.value = 'Project saved successfully.'
-    isSaveProjectDialogOpen.value = false
-    projectName.value = ''
+    await saveProject(name, '', projectRequirements, conversationId.value || undefined)
 
     // Lock the active conversation so it cannot be continued
     if (activeConversationId.value) {
       const idx = conversations.value.findIndex(
         (c) => c.conversationId === activeConversationId.value,
       )
-      if (idx !== -1) {
-        conversations.value[idx] = { ...conversations.value[idx], isLocked: true }
+
+      const conversationToLock = conversations.value[idx]
+
+      if (idx !== -1 && conversationToLock) {
+        conversations.value[idx] = {
+          ...conversationToLock,
+          isLocked: true,
+        }
+
         saveChatHistoryState({
           activeConversationId: activeConversationId.value,
           conversations: conversations.value,
@@ -622,7 +627,8 @@ onMounted(async () => {
         conversationId: bc.conversation_id,
         title: bc.title || bc.conversation_id.slice(0, 12),
         createdAt: bc.created_at ? new Date(bc.created_at).getTime() : Date.now(),
-        updatedAt: local?.updatedAt ?? (bc.created_at ? new Date(bc.created_at).getTime() : Date.now()),
+        updatedAt:
+          local?.updatedAt ?? (bc.created_at ? new Date(bc.created_at).getTime() : Date.now()),
         messages: local?.messages ?? [],
       }
     })
@@ -647,7 +653,10 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="relative flex h-full min-h-0 overflow-hidden" :class="hasAnyCollapsedPanel ? 'gap-3' : 'gap-4'">
+  <div
+    class="relative flex h-full min-h-0 overflow-hidden"
+    :class="hasAnyCollapsedPanel ? 'gap-3' : 'gap-4'"
+  >
     <aside
       class="min-h-0 shrink-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-in-out"
       :style="{ width: historyPanelWidth }"
@@ -660,7 +669,16 @@ onMounted(async () => {
             class="flex h-full w-full items-center justify-center rounded-3xl bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
             aria-label="Open history panel"
           >
-            <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 20 20"
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="M12 15l-5-5 5-5" />
             </svg>
           </button>
@@ -671,7 +689,9 @@ onMounted(async () => {
             <div class="flex items-start justify-between gap-3">
               <div>
                 <p class="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">History</p>
-                <h2 class="mt-1 text-lg font-semibold tracking-tight text-slate-900">Conversations</h2>
+                <h2 class="mt-1 text-lg font-semibold tracking-tight text-slate-900">
+                  Conversations
+                </h2>
               </div>
 
               <button
@@ -680,7 +700,16 @@ onMounted(async () => {
                 class="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
                 aria-label="Hide history panel"
               >
-                <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <svg
+                  viewBox="0 0 20 20"
+                  class="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M8 5l5 5-5 5" />
                 </svg>
               </button>
@@ -707,13 +736,25 @@ onMounted(async () => {
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
-                        <svg v-if="conversation.isLocked" viewBox="0 0 20 20" class="h-3 w-3 shrink-0 opacity-60" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked">
+                        <svg
+                          v-if="conversation.isLocked"
+                          viewBox="0 0 20 20"
+                          class="h-3 w-3 shrink-0 opacity-60"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-label="Locked"
+                        >
                           <rect x="4" y="9" width="12" height="9" rx="2" />
                           <path d="M7 9V6a3 3 0 0 1 6 0v3" />
                         </svg>
                         <p class="truncate text-sm font-medium">{{ conversation.title }}</p>
                       </div>
-                      <p class="mt-1 truncate text-xs opacity-70">{{ getConversationPreview(conversation) }}</p>
+                      <p class="mt-1 truncate text-xs opacity-70">
+                        {{ getConversationPreview(conversation) }}
+                      </p>
                     </div>
                   </div>
 
@@ -737,7 +778,16 @@ onMounted(async () => {
                   class="absolute right-2 top-2 hidden rounded-full p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-500 group-hover:flex"
                   aria-label="Delete conversation"
                 >
-                  <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 20 20"
+                    class="h-3.5 w-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
                     <path d="M6 8v8M10 8v8M14 8v8M4 5h12M8 5V3h4v2" />
                   </svg>
                 </button>
@@ -755,7 +805,9 @@ onMounted(async () => {
       </Transition>
     </aside>
 
-    <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+    <section
+      class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
+    >
       <div class="shrink-0 border-b border-slate-100 px-4 py-3">
         <div class="flex items-start justify-between gap-4">
           <div>
@@ -775,7 +827,10 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div ref="chatContainer" class="min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-4 py-4 sm:px-5">
+      <div
+        ref="chatContainer"
+        class="min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-4 py-4 sm:px-5"
+      >
         <div
           v-if="messages.length === 0"
           class="rounded-3xl border border-dashed border-slate-200 bg-white px-5 py-8 text-center text-sm text-slate-500 shadow-sm"
@@ -796,7 +851,10 @@ onMounted(async () => {
                 : 'rounded-bl-md border border-slate-200 bg-white text-slate-900',
             ]"
           >
-            <div class="markdown-content" v-html="renderMarkdown(msg.content, msg.role === 'user')" />
+            <div
+              class="markdown-content"
+              v-html="renderMarkdown(msg.content, msg.role === 'user')"
+            />
 
             <button
               v-if="shouldShowStructureAction(msg.content)"
@@ -816,7 +874,11 @@ onMounted(async () => {
         </div>
 
         <div v-if="isLoading" class="flex justify-start">
-          <div class="rounded-3xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-sm" aria-live="polite" aria-label="Assistant is thinking">
+          <div
+            class="rounded-3xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-sm"
+            aria-live="polite"
+            aria-label="Assistant is thinking"
+          >
             <span class="thinking-dots" aria-hidden="true">
               <span></span>
               <span></span>
@@ -825,7 +887,10 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div v-if="error" class="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div
+          v-if="error"
+          class="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
           {{ error }}
         </div>
       </div>
@@ -836,7 +901,16 @@ onMounted(async () => {
           v-if="isConversationLocked"
           class="mb-3 flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700"
         >
-          <svg viewBox="0 0 20 20" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <svg
+            viewBox="0 0 20 20"
+            class="h-4 w-4 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
             <rect x="4" y="9" width="12" height="9" rx="2" />
             <path d="M7 9V6a3 3 0 0 1 6 0v3" />
           </svg>
@@ -848,7 +922,11 @@ onMounted(async () => {
             v-model="inputMessage"
             :disabled="isLoading || isConversationLocked"
             @keydown="handleKeyDown"
-            :placeholder="isConversationLocked ? 'Conversation locked — start a new chat to continue.' : 'Type your message...'"
+            :placeholder="
+              isConversationLocked
+                ? 'Conversation locked — start a new chat to continue.'
+                : 'Type your message...'
+            "
             rows="1"
             class="h-20 min-h-[3.25rem] flex-1 resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
           />
@@ -877,7 +955,16 @@ onMounted(async () => {
             class="flex h-full w-full items-center justify-center rounded-3xl bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
             aria-label="Open structure panel"
           >
-            <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 20 20"
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="M8 5l5 5-5 5" />
             </svg>
           </button>
@@ -897,7 +984,16 @@ onMounted(async () => {
                 class="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
                 aria-label="Hide structure panel"
               >
-                <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <svg
+                  viewBox="0 0 20 20"
+                  class="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M12 5l-5 5 5 5" />
                 </svg>
               </button>
@@ -917,17 +1013,42 @@ onMounted(async () => {
                   class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-slate-100"
                 >
                   <span class="text-sm font-semibold text-slate-900">{{ section.name }}</span>
-                  <span class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500">
-                    <svg v-if="isStructureSectionOpen(section.name)" viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <span
+                    class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500"
+                  >
+                    <svg
+                      v-if="isStructureSectionOpen(section.name)"
+                      viewBox="0 0 20 20"
+                      class="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
                       <path d="M5 8l5 5 5-5" />
                     </svg>
-                    <svg v-else viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <svg
+                      v-else
+                      viewBox="0 0 20 20"
+                      class="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
                       <path d="M8 5l5 5-5 5" />
                     </svg>
                   </span>
                 </button>
 
-                <div v-show="isStructureSectionOpen(section.name)" class="border-t border-slate-200 px-4 py-3">
+                <div
+                  v-show="isStructureSectionOpen(section.name)"
+                  class="border-t border-slate-200 px-4 py-3"
+                >
                   <ul class="space-y-2 text-sm leading-6 text-slate-700">
                     <li
                       v-for="(requirement, requirementIndex) in section.requirements"
@@ -982,8 +1103,8 @@ onMounted(async () => {
           Upload Tender Document
         </h3>
         <p class="mt-2 text-sm leading-6 text-slate-600">
-          Select a tender document (PDF or DOCX) to start a new chat. The document will be
-          analysed and a marking scheme will be extracted automatically.
+          Select a tender document (PDF or DOCX) to start a new chat. The document will be analysed
+          and a marking scheme will be extracted automatically.
         </p>
 
         <!-- Hidden file input -->
@@ -1002,12 +1123,23 @@ onMounted(async () => {
           :disabled="isUploadingDoc"
           class="mt-5 flex w-full flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <svg viewBox="0 0 24 24" class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            class="h-8 w-8 text-slate-400"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
             <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
             <polyline points="16 8 12 4 8 8" />
             <line x1="12" y1="4" x2="12" y2="16" />
           </svg>
-          <span v-if="uploadModalFile" class="font-medium text-slate-900 break-all text-center">{{ uploadModalFile.name }}</span>
+          <span v-if="uploadModalFile" class="font-medium text-slate-900 break-all text-center">{{
+            uploadModalFile.name
+          }}</span>
           <span v-else>Click to choose a file&nbsp;&nbsp;·&nbsp;&nbsp;PDF or DOCX</span>
         </button>
 
@@ -1052,7 +1184,8 @@ onMounted(async () => {
           Save Structure as Project?
         </h3>
         <p class="mt-3 text-sm leading-6 text-slate-600">
-          Are you sure you want to save this Structure as a project? After saving, this Structure will no longer be editable.
+          Are you sure you want to save this Structure as a project? After saving, this Structure
+          will no longer be editable.
         </p>
 
         <label class="mt-5 block">
@@ -1125,7 +1258,9 @@ onMounted(async () => {
 
 .panel-fade-enter-active,
 .panel-fade-leave-active {
-  transition: opacity 220ms ease, transform 220ms ease;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
 }
 
 .panel-fade-enter-from,
@@ -1166,7 +1301,7 @@ onMounted(async () => {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(120deg, rgba(255,255,255,0.6), rgba(255,255,255,0));
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
   opacity: 0;
   transition: opacity 180ms ease;
 }
@@ -1176,7 +1311,15 @@ onMounted(async () => {
 }
 
 @keyframes thinking-bounce {
-  0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
-  40% { transform: translateY(-0.28rem); opacity: 1; }
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  40% {
+    transform: translateY(-0.28rem);
+    opacity: 1;
+  }
 }
 </style>

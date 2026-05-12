@@ -5,6 +5,7 @@ interface Props {
   maxFiles?: number
   acceptedFormats?: string[]
   initialFiles?: File[]
+  compact?: boolean
 }
 
 interface Emits {
@@ -15,6 +16,7 @@ const props = withDefaults(defineProps<Props>(), {
   maxFiles: 10,
   acceptedFormats: () => ['pdf', 'docx', 'doc'],
   initialFiles: () => [],
+  compact: true,
 })
 
 const emit = defineEmits<Emits>()
@@ -106,16 +108,15 @@ function openFileDialog() {
       @dragleave="handleDragLeave"
       @drop="handleDrop"
       :class="[
-        'rounded-2xl border-2 border-dashed p-8 text-center transition',
+        'rounded-2xl border-2 border-dashed text-center transition',
+        props.compact ? 'p-3' : 'p-8',
         isDragging ? 'border-slate-500 bg-slate-100' : 'border-slate-200 bg-slate-50 hover:bg-slate-100',
       ]"
     >
-      <p class="text-sm font-medium text-slate-700">Drop files or select</p>
-
       <button
         type="button"
         @click="openFileDialog"
-        class="mt-4 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700"
+        class="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
       >
         Select files
       </button>
@@ -134,16 +135,16 @@ function openFileDialog() {
       {{ errorMessage }}
     </div>
 
-    <div class="mt-4 min-h-0 flex-1 overflow-hidden pr-1">
-      <div class="max-h-56 space-y-2 overflow-y-auto">
+    <div class="mt-2 min-h-0 flex-1 overflow-hidden pr-1">
+      <div :class="props.compact ? 'max-h-28 space-y-1.5' : 'max-h-56 space-y-2'" class="overflow-y-auto">
         <div
           v-for="(file, index) in uploadedFiles"
           :key="`${file.name}-${index}`"
-          class="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3"
+          class="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2"
         >
           <div class="min-w-0">
             <p class="truncate text-sm font-medium text-slate-900">{{ file.name }}</p>
-            <p class="text-xs text-slate-500">{{ (file.size / 1024).toFixed(0) }} KB</p>
+            <p class="text-[11px] text-slate-500">{{ (file.size / 1024).toFixed(0) }} KB</p>
           </div>
 
           <button type="button" @click="removeFile(index)" class="ml-3 text-sm font-medium text-slate-500 hover:text-slate-900">

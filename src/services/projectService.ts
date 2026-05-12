@@ -4,10 +4,14 @@
  */
 import { BACKEND_URL, CONNECTION_TIMEOUT_MS } from './backendConfig'
 import { getAuthToken } from './loginService'
-import type { MarkingScheme, ProjectRequirements, Project, ReviewResponse, ScoringJob, SubmitJobResponse } from './backendTypes'
+import type { MarkingScheme, ProjectRequirements, Project, ReviewResponse, ScoringJob, SubmitJobResponse, ReviewHistoryItem } from './backendTypes'
 
 function authHeaders(): Record<string, string> {
-    return { Authorization: `Bearer ${getAuthToken()}` }
+    const token = getAuthToken().trim()
+    if (!token) {
+        throw new Error('Not authenticated. Please log in again.')
+    }
+    return { Authorization: `Bearer ${token}` }
 }
 
 export function buildProjectRequirementsFromStructure(
@@ -89,15 +93,31 @@ export async function getProject(projectId: number): Promise<Project> {
 }
 
 export async function deleteProject(projectId: number): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/projects/${projectId}`, {
-        method: 'DELETE',
-        headers: authHeaders(),
-    })
+    const endpoints = [
+        `${BACKEND_URL}/projects/${projectId}`,
+        `${BACKEND_URL}/projects/${projectId}/`,
+    ]
 
-    if (!response.ok) {
+    let lastError: string | null = null
+
+    for (const endpoint of endpoints) {
+        const response = await fetch(endpoint, {
+            method: 'DELETE',
+            headers: authHeaders(),
+        })
+
+        if (response.ok) return
+
         const detail = await response.text()
-        throw new Error(`Failed to delete project (${response.status}): ${detail}`)
+        lastError = `DELETE ${endpoint} -> ${response.status}: ${detail || 'No response body'}`
+
+        // If the backend is rejecting the route or method, try the alternate slash form.
+        if (![404, 405, 307, 308].includes(response.status)) {
+            break
+        }
     }
+
+    throw new Error(lastError ?? `Failed to delete project (${projectId})`)
 }
 
 // ── Step 8-10: Score tenderer submissions ─────────────────────────────────────
@@ -158,6 +178,19 @@ export async function deleteBackendConversation(conversationId: string): Promise
         const detail = await response.text()
         throw new Error(`Failed to delete conversation (${response.status}): ${detail}`)
     }
+}
+
+
+
+export async function getReviewHistory(projectId: number): Promise<ReviewHistoryItem[]> {
+    const response = await fetch(`${BACKEND_URL}/reviews/${projectId}/history`, {
+        headers: authHeaders(),
+    })
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`Failed to load review history (${response.status}): ${detail}`)
+    }
+    return response.json() as Promise<ReviewHistoryItem[]>
 }
 
 // ── Async scoring jobs ────────────────────────────────────────────────────────
