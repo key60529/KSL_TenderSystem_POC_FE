@@ -41,8 +41,9 @@ export async function analyseMarkingScheme(file: File): Promise<MarkingScheme> {
         throw new Error(`Scheme analysis failed (${response.status}): ${detail}`)
     }
 
-    const data = (await response.json()) as { marking_scheme: MarkingScheme }
-    return data.marking_scheme
+    const data = (await response.json()) as { marking_scheme: MarkingScheme | string }
+    const raw = data.marking_scheme
+    return (typeof raw === 'string' ? JSON.parse(raw) : raw) as MarkingScheme
 }
 
 // ── Step 4-5: Save project with confirmed marking scheme ──────────────────────
